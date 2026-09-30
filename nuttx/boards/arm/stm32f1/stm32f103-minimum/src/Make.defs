@@ -96,6 +96,10 @@ ifeq ($(CONFIG_LCD_PCD8544),y)
   CSRCS += stm32_pcd8544.c
 endif
 
+ifeq ($(CONFIG_LCD_GC9B72),y)
+  CSRCS += stm32_lcd_gc9b72.c
+endif
+
 ifeq ($(CONFIG_USBDEV),y)
   CSRCS += stm32_usbdev.c
 endif

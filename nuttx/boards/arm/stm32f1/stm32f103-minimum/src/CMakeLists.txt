@@ -94,6 +94,10 @@ if(CONFIG_LCD_PCD8544)
   list(APPEND SRCS stm32_pcd8544.c)
 endif()
 
+if(CONFIG_LCD_GC9B72)
+  list(APPEND SRCS stm32_lcd_gc9b72.c)
+endif()
+
 if(CONFIG_USBDEV)
   list(APPEND SRCS stm32_usbdev.c)
 endif()

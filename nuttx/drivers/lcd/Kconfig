@@ -1089,6 +1089,43 @@ config LCD_PCD8544
 		Required LCD driver settings:
 		LCD_MAXCONTRAST should be 255, but any value >0 and <=255 will be accepted.
 
+config LCD_GC9B72
+	bool "Galaxycore GC9B72 TFT Controller"
+	depends on SPI
+	select SPI_CMDDATA
+	default n
+	---help---
+		Driver for a 4-wire SPI GC9B72 TFT controller.
+
+if LCD_GC9B72
+
+config LCD_GC9B72_XRES
+	int "GC9B72 logical X resolution"
+	default 648
+
+config LCD_GC9B72_YRES
+	int "GC9B72 logical Y resolution"
+	default 200
+
+config LCD_GC9B72_BPP
+	int "GC9B72 bits per pixel"
+	default 16
+	range 16 16
+
+config LCD_GC9B72_SPIMODE
+	int "GC9B72 SPI mode"
+	default 0
+	range 0 3
+
+config LCD_GC9B72_FREQUENCY
+	int "GC9B72 SPI frequency"
+	default 18000000
+	range 1000000 18000000
+	---help---
+		STM32F103 SPI1 runs from 72 MHz. 18 MHz is a safe hardware divider.
+
+endif # LCD_GC9B72
+
 if LCD_PCD8544
 
 config PCD8544_NINTERFACES

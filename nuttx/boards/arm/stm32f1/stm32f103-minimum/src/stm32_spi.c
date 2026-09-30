@@ -96,6 +96,9 @@ void stm32_spidev_initialize(void)
 #ifdef CONFIG_MMCSD_SPI
   stm32_configgpio(GPIO_SDCARD_CS);           /* SD/MMC Card chip select */
 #endif
+#ifdef CONFIG_LCD_GC9B72
+  stm32_configgpio(GPIO_GC9B72_CS);
+#endif
 }
 
 /****************************************************************************
@@ -187,6 +190,14 @@ void stm32_spi1select(struct spi_dev_s *dev, uint32_t devid,
 #ifdef CONFIG_MTD_W25
   stm32_gpiowrite(FLASH_SPI1_CS, !selected);
 #endif
+
+#ifdef CONFIG_LCD_GC9B72
+  if (devid == SPIDEV_DISPLAY(0))
+    {
+      stm32_gpiowrite(GPIO_GC9B72_CS, !selected);
+      return;
+    }
+#endif
 }
 
 uint8_t stm32_spi1status(struct spi_dev_s *dev, uint32_t devid)
@@ -277,6 +288,14 @@ int stm32_spi1cmddata(struct spi_dev_s *dev, uint32_t devid,
     }
 #endif
 
+#ifdef CONFIG_LCD_GC9B72
+  if (devid == SPIDEV_DISPLAY(0))
+    {
+      /* cmd=true: DC=0; cmd=false: DC=1 */
+      stm32_gpiowrite(GPIO_GC9B72_DC, !cmd);
+      return OK;
+    }
+#endif
   return -ENODEV;
 }
 #endif

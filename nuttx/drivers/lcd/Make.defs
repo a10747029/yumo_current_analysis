@@ -151,6 +151,10 @@ ifeq ($(CONFIG_LCD_GC9A01),y)
   CSRCS += gc9a01.c
 endif
 
+ifeq ($(CONFIG_LCD_GC9B72),y)
+  CSRCS += gc9b72.c
+endif
+
 ifeq ($(CONFIG_LCD_JD9851),y)
   CSRCS += jd9851.c
 endif

@@ -176,6 +176,24 @@
 #define BOARD_TONE_ONESHOT_TIM     3   /* Oneshot timer for note timings */
 #define BOARD_TONE_ONESHOT_TIM_RES 10  /* Oneshot timer resolution (us)  */
 
+/* GC9B72 SPI LCD: SPI1 uses PA5=SCK, PA7=MOSI */
+
+#define GPIO_GC9B72_CS \
+  (GPIO_OUTPUT | GPIO_CNF_OUTPP | GPIO_MODE_50MHz | \
+   GPIO_OUTPUT_SET | GPIO_PORTB | GPIO_PIN12)
+
+#define GPIO_GC9B72_DC \
+  (GPIO_OUTPUT | GPIO_CNF_OUTPP | GPIO_MODE_50MHz | \
+   GPIO_OUTPUT_CLEAR | GPIO_PORTB | GPIO_PIN10)
+
+#define GPIO_GC9B72_RST \
+  (GPIO_OUTPUT | GPIO_CNF_OUTPP | GPIO_MODE_50MHz | \
+   GPIO_OUTPUT_SET | GPIO_PORTB | GPIO_PIN1)
+
+#define GPIO_GC9B72_BL \
+  (GPIO_OUTPUT | GPIO_CNF_OUTPP | GPIO_MODE_50MHz | \
+   GPIO_OUTPUT_CLEAR | GPIO_PORTB | GPIO_PIN14)
+
 /* NRF24L01 Driver **********************************************************/
 
 /* Chip enable:  PB.1 */
