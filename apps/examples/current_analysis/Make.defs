@@ -1,5 +1,5 @@
 ############################################################################
-# apps/examples/current_test/Make.defs
+# apps/examples/current_analysis/Make.defs
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,6 @@
 #
 ############################################################################
 
-ifneq ($(CONFIG_EXAMPLES_CURRENT_TEST),)
-CONFIGURED_APPS += $(APPDIR)/examples/current_test
+ifneq ($(CONFIG_EXAMPLES_CURRENT_ANALYSIS),)
+CONFIGURED_APPS += $(APPDIR)/examples/current_analysis
 endif

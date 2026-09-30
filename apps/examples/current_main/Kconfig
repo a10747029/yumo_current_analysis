@@ -1,5 +1,0 @@
-config EXAMPLES_CURRENT_MAIN
-	bool "Current main example"
-	default n
-	---help---
-		Simple current main example.

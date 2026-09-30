@@ -1,5 +1,5 @@
 # ##############################################################################
-# apps/examples/current_test/CMakeLists.txt
+# apps/examples/current_analysis/CMakeLists.txt
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,14 +20,14 @@
 #
 # ##############################################################################
 
-if(CONFIG_EXAMPLES_CURRENT_TEST)
+if(CONFIG_EXAMPLES_CURRENT_ANALYSIS)
   nuttx_add_application(
     NAME
-    ${CONFIG_EXAMPLES_CURRENT_TEST_PROGNAME}
+    ${CONFIG_EXAMPLES_CURRENT_ANALYSIS_PROGNAME}
     SRCS
-    current_test_main.c
+    current_analysis_main.c
     STACKSIZE
-    ${CONFIG_EXAMPLES_CURRENT_TEST_STACKSIZE}
+    ${CONFIG_EXAMPLES_CURRENT_ANALYSIS_STACKSIZE}
     PRIORITY
-    ${CONFIG_EXAMPLES_CURRENT_TEST_PRIORITY})
+    ${CONFIG_EXAMPLES_CURRENT_ANALYSIS_PRIORITY})
 endif()

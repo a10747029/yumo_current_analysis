@@ -1,5 +1,5 @@
 /****************************************************************************
- * apps/examples/current_test/current_test_main.c
+ * apps/examples/current_analysis/current_analysis_main.c
  *
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -33,11 +33,11 @@
  ****************************************************************************/
 
 /****************************************************************************
- * current_test_main
+ * current_analysis_main
  ****************************************************************************/
 
 int main(int argc, FAR char *argv[])
 {
-  printf("current_test: Current test example\n");
+  printf("current_analysis: Current analysis example\n");
   return 0;
 }

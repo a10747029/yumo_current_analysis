@@ -1,5 +1,5 @@
 ############################################################################
-# apps/examples/current_test/Make.defs
+# apps/examples/current_test/Makefile
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,17 @@
 #
 ############################################################################
 
-ifneq ($(CONFIG_EXAMPLES_CURRENT_TEST),)
-CONFIGURED_APPS += $(APPDIR)/examples/current_test
-endif
+include $(APPDIR)/Make.defs
+
+# Current Test built-in application info
+
+PROGNAME  = $(CONFIG_EXAMPLES_CURRENT_TEST_PROGNAME)
+PRIORITY  = $(CONFIG_EXAMPLES_CURRENT_TEST_PRIORITY)
+STACKSIZE = $(CONFIG_EXAMPLES_CURRENT_TEST_STACKSIZE)
+MODULE    = $(CONFIG_EXAMPLES_CURRENT_TEST)
+
+# Current Test Example
+
+MAINSRC = current_test_main.c
+
+include $(APPDIR)/Application.mk

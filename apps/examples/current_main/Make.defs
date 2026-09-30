@@ -1,3 +1,0 @@
-ifeq ($(CONFIG_EXAMPLES_CURRENT_MAIN),y)
-CSRCS += current_main_main.c
-endif

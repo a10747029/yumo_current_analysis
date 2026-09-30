@@ -1,5 +1,5 @@
 ############################################################################
-# apps/examples/current_test/Make.defs
+# apps/examples/logo_display/Makefile
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,17 @@
 #
 ############################################################################
 
-ifneq ($(CONFIG_EXAMPLES_CURRENT_TEST),)
-CONFIGURED_APPS += $(APPDIR)/examples/current_test
-endif
+include $(APPDIR)/Make.defs
+
+# Logo Display built-in application info
+
+PROGNAME  = $(CONFIG_EXAMPLES_LOGO_DISPLAY_PROGNAME)
+PRIORITY  = $(CONFIG_EXAMPLES_LOGO_DISPLAY_PRIORITY)
+STACKSIZE = $(CONFIG_EXAMPLES_LOGO_DISPLAY_STACKSIZE)
+MODULE    = $(CONFIG_EXAMPLES_LOGO_DISPLAY)
+
+# Logo Display Example
+
+MAINSRC = logo_display_main.c
+
+include $(APPDIR)/Application.mk

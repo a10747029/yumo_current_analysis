@@ -1,5 +1,29 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
 config EXAMPLES_LOGO_DISPLAY
 	bool "Logo display example"
 	default n
 	---help---
-		Simple logo display example.
+		Enable the logo display example
+
+if EXAMPLES_LOGO_DISPLAY
+
+config EXAMPLES_LOGO_DISPLAY_PROGNAME
+	string "Program name"
+	default "logo_display"
+	---help---
+		This is the name of the program that will be used when the NSH ELF
+		program is installed.
+
+config EXAMPLES_LOGO_DISPLAY_PRIORITY
+	int "Logo display task priority"
+	default 100
+
+config EXAMPLES_LOGO_DISPLAY_STACKSIZE
+	int "Logo display stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+endif

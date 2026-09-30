@@ -1,0 +1,29 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config EXAMPLES_CURRENT_ANALYSIS
+	bool "Current analysis example"
+	default n
+	---help---
+		Enable the current analysis example
+
+if EXAMPLES_CURRENT_ANALYSIS
+
+config EXAMPLES_CURRENT_ANALYSIS_PROGNAME
+	string "Program name"
+	default "current_analysis"
+	---help---
+		This is the name of the program that will be used when the NSH ELF
+		program is installed.
+
+config EXAMPLES_CURRENT_ANALYSIS_PRIORITY
+	int "Current analysis task priority"
+	default 100
+
+config EXAMPLES_CURRENT_ANALYSIS_STACKSIZE
+	int "Current analysis stack size"
+	default DEFAULT_TASK_STACKSIZE
+
+endif
