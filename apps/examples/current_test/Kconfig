@@ -1,0 +1,5 @@
+config EXAMPLES_CURRENT_TEST
+	bool "Current test example"
+	default n
+	---help---
+		Simple current test example.

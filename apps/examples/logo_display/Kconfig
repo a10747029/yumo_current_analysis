@@ -1,0 +1,5 @@
+config EXAMPLES_LOGO_DISPLAY
+	bool "Logo display example"
+	default n
+	---help---
+		Simple logo display example.
