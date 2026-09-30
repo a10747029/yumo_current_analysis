@@ -1,0 +1,208 @@
+/****************************************************************************
+ * libs/libc/elf/gnu-elf.ld.in
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+
+#include <nuttx/config.h>
+
+#if defined(CONFIG_BUILD_KERNEL) && defined(CONFIG_BINFMT_ELF_EXECUTABLE)
+#  define __ASSEMBLY__
+#  include <nuttx/addrenv.h>
+
+#  define TEXT CONFIG_ARCH_TEXT_VBASE
+#  define DATA CONFIG_ARCH_DATA_VBASE + ARCH_DATA_RESERVE_SIZE
+
+#else
+#  define TEXT 0x0
+#  define DATA
+#endif
+
+/* A chip that selects CONFIG_ARCH_HAVE_TEXT_HEAP_WORD_ALIGNED_READ cannot
+ * read its text region as data, so the loader puts every section that is not
+ * executable in the data region.  A fully linked program is loaded at the
+ * addresses in its own headers, so .rodata has to be linked there too: it
+ * leads the data region and .data follows it.
+ */
+
+#ifdef CONFIG_ARCH_HAVE_TEXT_HEAP_WORD_ALIGNED_READ
+#  define RODATA     DATA
+#  define DATA_START
+#else
+#  define RODATA
+#  define DATA_START DATA
+#endif
+
+#if defined(CONFIG_LIBC_ARCH_ELF_64BIT)
+#  define SECTIONS_ALIGN 8
+#else
+#  define SECTIONS_ALIGN 4
+#endif
+
+/* An FDPIC module is a shared object whose read-only and writable segments
+ * the loader places independently: the read-only one runs where the
+ * filesystem already holds it and only the writable one is copied to RAM,
+ * once per running instance.  So the two go into segments of their own, and
+ * .dynamic is named, because a shared object is bound through it.
+ *
+ * Everything else is common, the symbols crt0.c walks included, so a module
+ * is built and entered the same way whichever this is.
+ */
+
+#ifdef CONFIG_FDPIC
+#  define PHDR_TEXT :text
+#  define PHDR_DATA :data
+#  define DATA_ALIGN . = ALIGN(0x1000);
+
+PHDRS
+{
+  text    PT_LOAD FLAGS(5);    /* Read and execute */
+  data    PT_LOAD FLAGS(6);    /* Read and write   */
+  dynamic PT_DYNAMIC FLAGS(6);
+}
+
+#else
+#  define PHDR_TEXT
+#  define PHDR_DATA
+#  define DATA_ALIGN
+#endif
+
+SECTIONS
+{
+  .text TEXT :
+    {
+      _stext = . ;
+      *(.literal)
+      *(.literal.*)
+      *(.text)
+      *(.text.*)
+      *(.gnu.warning)
+      *(.stub)
+      *(.glue_7)
+      *(.glue_7t)
+      *(.jcr)
+
+      /* C++ support: the .init and .fini sections hold the logic that runs
+       * the static constructors and destructors.
+       */
+
+      *(.gnu.linkonce.t.*)
+      *(.init)
+      *(.fini)
+      . = ALIGN(SECTIONS_ALIGN);
+      _etext = . ;
+    } PHDR_TEXT
+
+  .rodata RODATA :
+    {
+      _srodata = . ;
+      *(.rodata)
+      *(.rodata1)
+      *(.rodata.*)
+      *(.gnu.linkonce.r*)
+      . = ALIGN(SECTIONS_ALIGN);
+      _erodata = . ;
+    } PHDR_TEXT
+
+  .eh_frame :
+    {
+      KEEP (*(.eh_frame))
+      *(.eh_frame.*)
+    } PHDR_TEXT
+
+  DATA_ALIGN
+
+  .data DATA_START :
+    {
+      _sdata = . ;
+      *(.data)
+      *(.data1)
+      *(.data.*)
+      *(.gnu.linkonce.d*)
+      . = ALIGN(SECTIONS_ALIGN);
+      _edata = . ;
+    } PHDR_DATA
+
+  .init_array :
+    {
+      _sinit = .;
+      _sctors = .;
+      KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+      KEEP(*(.init_array .ctors))
+      . = ALIGN(SECTIONS_ALIGN);
+      _einit = .;
+      _ectors = .;
+    } PHDR_DATA
+
+  .fini_array :
+    {
+      _sfini = .;
+      _sdtors = .;
+      KEEP (*(.dtors))
+      KEEP (*(.fini_array))
+      KEEP (*(SORT(.fini_array.*)))
+      . = ALIGN(SECTIONS_ALIGN);
+      _efini = .;
+      _edtors = .;
+    } PHDR_DATA
+
+#ifdef CONFIG_FDPIC
+  .dynamic :
+    {
+      *(.dynamic)
+    } :data :dynamic
+#endif
+
+  .got :
+    {
+      *(.got*)
+    } PHDR_DATA
+
+  /* .bss holds no file content, so it comes last.  Everything ahead of it
+   * has content, thus the writable segment's p_filesz stops where .bss
+   * starts and the file does not carry it.
+   */
+
+  .bss :
+    {
+      _sbss = . ;
+      *(.bss)
+      *(.bss.*)
+      *(.sbss)
+      *(.sbss.*)
+      *(.gnu.linkonce.b*)
+      *(COMMON)
+      . = ALIGN(SECTIONS_ALIGN);
+      _ebss = . ;
+    } PHDR_DATA
+
+    /* Stabs debugging sections.    */
+
+    .stab 0 : { *(.stab) }
+    .stabstr 0 : { *(.stabstr) }
+    .stab.excl 0 : { *(.stab.excl) }
+    .stab.exclstr 0 : { *(.stab.exclstr) }
+    .stab.index 0 : { *(.stab.index) }
+    .stab.indexstr 0 : { *(.stab.indexstr) }
+    .comment 0 : { *(.comment) }
+    .debug_abbrev 0 : { *(.debug_abbrev) }
+    .debug_info 0 : { *(.debug_info) }
+    .debug_line 0 : { *(.debug_line) }
+    .debug_pubnames 0 : { *(.debug_pubnames) }
+    .debug_aranges 0 : { *(.debug_aranges) }
+}

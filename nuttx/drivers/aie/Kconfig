@@ -1,0 +1,13 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config AI_ENGINE
+	bool "AI Engine Acceleration Support"
+	default n
+	---help---
+		Upper-half character driver for hardware AI / NPU engines.
+		A board or architecture lower-half must implement struct
+		aie_ops_s and call aie_register(). There is no in-tree
+		lower-half yet. See include/nuttx/aie/ai_engine.h.

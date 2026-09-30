@@ -1,0 +1,144 @@
+/****************************************************************************
+ * include/nuttx/vhost/vhost.h
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+#ifndef __INCLUDE_NUTTX_VHOST_VHOST_H
+#define __INCLUDE_NUTTX_VHOST_VHOST_H
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef CONFIG_DRIVERS_VHOST
+
+#include <nuttx/compiler.h>
+#include <nuttx/list.h>
+#include <nuttx/virtio/virtio-config.h>
+#include <openamp/open_amp.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Public Type Definitions
+ ****************************************************************************/
+
+/* Wrapper the vhost API to virtio API */
+
+#define vhost_create_virtqueues virtio_create_virtqueues
+#define vhost_delete_virtqueues virtio_delete_virtqueues
+#define vhost_set_status        virtio_set_status
+#define vhost_get_status        virtio_get_status
+#define vhost_set_features      virtio_set_features
+#define vhost_get_features      virtio_get_features
+#define vhost_read_config       virtio_read_config
+#define vhost_write_config      virtio_write_config
+
+/* Vhost helper functions */
+
+#define vhost_has_feature         virtio_has_feature
+#define vhost_read_config_member  virtio_read_config_member
+#define vhost_write_config_member virtio_write_config_member
+
+/* Wrapper the struct vhost_device to struct virtio_device */
+
+#define vhost_device            virtio_device
+
+struct vhost_driver
+{
+  struct list_node   node;
+  uint32_t           device;   /* device id */
+  CODE int         (*probe)(FAR struct vhost_device *hdev);
+  CODE void        (*remove)(FAR struct vhost_device *hdev);
+};
+
+/* Peer buffer described by its full 64-bit guest physical address.  On
+ * targets where the CPU cannot address all of the peer's memory directly
+ * (e.g. a 32-bit remote core with the driver side on a 64-bit host),
+ * vhost_get_vq_buffers() is unusable because converting the descriptor
+ * address to a CPU pointer truncates it; this variant hands the raw
+ * address to the class driver, which must map it appropriately.
+ */
+
+struct vhost_buf_s
+{
+  uint64_t addr;               /* Guest physical address from descriptor */
+  uint32_t len;                /* Descriptor length */
+};
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+#ifdef __cplusplus
+#define EXTERN extern "C"
+extern "C"
+{
+#else
+#define EXTERN extern
+#endif
+
+int vhost_register_device(FAR struct vhost_device *hdev);
+int vhost_register_driver(FAR struct vhost_driver *hdrv);
+int vhost_unregister_driver(FAR struct vhost_driver *hdrv);
+int vhost_unregister_device(FAR struct vhost_device *hdev);
+int vhost_get_vq_buffers(FAR struct virtqueue *vq,
+                         FAR struct virtqueue_buf *vb, size_t vbsize,
+                         FAR size_t *vbcnt);
+int vhost_get_vq_buffers_pa(FAR struct virtqueue *vq,
+                            FAR struct vhost_buf_s *vb, size_t vbsize,
+                            FAR size_t *vbcnt);
+
+#ifdef CONFIG_ARCH_HAVE_VHOST_IOMAP
+/* Arch-provided: map a peer 64-bit physical address into CPU-reachable
+ * memory.  Returns the mapped VA; *avail (if non-NULL) receives the number
+ * of contiguous bytes reachable from it.  The mapping may be invalidated
+ * by the next call (e.g. a sliding hardware window), so callers must
+ * serialize use.
+ *
+ * This exists because the libmetal path used by virtqueue_phys_to_virt()
+ * cannot express such an address: metal_phys_addr_t is an unsigned long
+ * and up_addrenv_pa_to_va() takes a uintptr_t, both 32-bit on the cores
+ * that need this hook, so the descriptor address would be truncated
+ * before any translation happens.  Arches whose peer memory does fit a
+ * pointer need neither this hook nor vhost_get_vq_buffers_pa(); they are
+ * served by up_addrenv_pa_to_va() like the rest of libmetal.
+ */
+
+FAR void *up_vhost_iomap(uint64_t pa, FAR size_t *avail);
+#endif
+
+/****************************************************************************
+ * Name: vhost_register_drivers
+ ****************************************************************************/
+
+void vhost_register_drivers(void);
+
+#undef EXTERN
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CONFIG_DRIVERS_VHOST */
+
+#endif /* __INCLUDE_NUTTX_VHOST_VHOST_H */

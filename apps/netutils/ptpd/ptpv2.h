@@ -1,0 +1,194 @@
+/****************************************************************************
+ * apps/netutils/ptpd/ptpv2.h
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+#ifndef __APPS_NETUTILS_PTPD_PTPV2_H
+#define __APPS_NETUTILS_PTPD_PTPV2_H
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/compiler.h>
+
+#include <stdint.h>
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Time-critical messages (id < 8) are sent to port 319,
+ * other messages to port 320.
+ */
+
+#define PTP_UDP_PORT_EVENT 319
+#define PTP_UDP_PORT_INFO  320
+
+/* Multicast addresses to send to: 224.0.1.129 (primary) and
+ * 224.0.0.107 (peer delay).
+ */
+
+#define PTP_MULTICAST_ADDR        ((in_addr_t)0xE0000181)
+#define PTP_PDELAY_MULTICAST_ADDR ((in_addr_t)0xE000006B)
+
+/* IEEE 1588-2008 Annex F Multicast MAC Addresses */
+
+#define PTP_MULTICAST_MAC        { 0x01, 0x1b, 0x19, 0x00, 0x00, 0x00 }
+#define PTP_PDELAY_MULTICAST_MAC { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x0e }
+
+/* PTP over Ethernet (IEEE 802.3 / Layer 2) EtherType */
+
+#ifndef ETHERTYPE_PTP
+#  define ETHERTYPE_PTP 0x88f7
+#endif
+
+/* Message types */
+
+#define PTP_MSGTYPE_MASK                  0x0F
+#define PTP_MSGTYPE_SYNC                  0
+#define PTP_MSGTYPE_DELAY_REQ             1
+#define PTP_MSGTYPE_PDELAY_REQ            2
+#define PTP_MSGTYPE_PDELAY_RESP           3
+#define PTP_MSGTYPE_FOLLOW_UP             8
+#define PTP_MSGTYPE_DELAY_RESP            9
+#define PTP_MSGTYPE_PDELAY_RESP_FOLLOW_UP 0x0A
+#define PTP_MSGTYPE_ANNOUNCE              11
+
+/* Message flags */
+
+#define PTP_FLAGS0_TWOSTEP        (1 << 1)
+
+/* Special logMessageInterval values (IEEE 1588-2008 Table 23) */
+
+#define PTP_LOG_INTERVAL_DELAY_REQ 0x7f
+
+/* PTP versions (IEEE 1588-2008 / IEEE 1588-2019 Table 18) */
+
+#define PTP_VERSION_2_0           0x02
+#define PTP_VERSION_2_1           0x12
+
+/****************************************************************************
+ * Public Types
+ ****************************************************************************/
+
+/* Defined in IEEE 1588-2008 Precision Time Protocol
+ * All multi-byte fields are big-endian.
+ */
+
+/* Common header for all message types */
+
+begin_packed_struct struct ptp_header_s
+{
+  uint8_t messagetype;
+  uint8_t version;
+  uint8_t messagelength[2];
+  uint8_t domain;
+  uint8_t reserved1;
+  uint8_t flags[2];
+  uint8_t correction[8];
+  uint8_t reserved2[4];
+  uint8_t sourceidentity[8];
+  uint8_t sourceportindex[2];
+  uint8_t sequenceid[2];
+  uint8_t controlfield;
+  uint8_t logmessageinterval;
+} end_packed_struct;
+
+/* Announce a master clock */
+
+begin_packed_struct struct ptp_announce_s
+{
+  struct ptp_header_s header;
+  uint8_t origintimestamp[10];
+  uint8_t utcoffset[2];
+  uint8_t reserved;
+  uint8_t gm_priority1;
+  uint8_t gm_quality[4];
+  uint8_t gm_priority2;
+  uint8_t gm_identity[8];
+  uint8_t stepsremoved[2];
+  uint8_t timesource;
+} end_packed_struct;
+
+/* Sync: transmit timestamp from master clock */
+
+begin_packed_struct struct ptp_sync_s
+{
+  struct ptp_header_s header;
+  uint8_t origintimestamp[10];
+} end_packed_struct;
+
+/* FollowUp: actual timestamp of when sync message was sent */
+
+begin_packed_struct struct ptp_follow_up_s
+{
+  struct ptp_header_s header;
+  uint8_t origintimestamp[10];
+} end_packed_struct;
+
+/* DelayReq: request delay measurement */
+
+begin_packed_struct struct ptp_delay_req_s
+{
+  struct ptp_header_s header;
+  uint8_t origintimestamp[10];
+} end_packed_struct;
+
+/* DelayResp: response to DelayReq */
+
+begin_packed_struct struct ptp_delay_resp_s
+{
+  struct ptp_header_s header;
+  uint8_t receivetimestamp[10];
+  uint8_t reqidentity[8];
+  uint8_t reqportindex[2];
+} end_packed_struct;
+
+/* PdelayReq: request peer delay measurement */
+
+begin_packed_struct struct ptp_pdelay_req_s
+{
+  struct ptp_header_s header;
+  uint8_t origintimestamp[10];
+  uint8_t reserved[10];
+} end_packed_struct;
+
+/* PdelayResp: response to PdelayReq */
+
+begin_packed_struct struct ptp_pdelay_resp_s
+{
+  struct ptp_header_s header;
+  uint8_t requestreceipttimestamp[10];
+  uint8_t reqidentity[8];
+  uint8_t reqportindex[2];
+} end_packed_struct;
+
+/* PdelayRespFollowUp: actual transmit timestamp of PdelayResp */
+
+begin_packed_struct struct ptp_pdelay_resp_follow_up_s
+{
+  struct ptp_header_s header;
+  uint8_t responseorigintimestamp[10];
+  uint8_t reqidentity[8];
+  uint8_t reqportindex[2];
+} end_packed_struct;
+
+#endif /* __APPS_NETUTILS_PTPD_PTPV2_H */

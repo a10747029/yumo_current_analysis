@@ -1,0 +1,46 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config FS_AIO
+	bool "Asynchronous I/O support"
+	default n
+	depends on SCHED_WORKQUEUE && !DISABLE_ALL_SIGNALS
+	---help---
+		Enable support for asynchronous I/O.  This selection enables the
+		interfaces declared in include/aio.h.
+
+config FS_AIO_LISTIO_MAX
+	int "Maximum number of AIO operations in listio"
+	default 256
+	---help---
+		This option sets the maximum number of asynchronous I/O (AIO) operations
+		that can be submitted in a single call to lio_listio().
+
+		This value defines the upper limit for the 'nent' parameter in
+		lio_listio(mode, aiocb_list, nent, sevp). Increasing this value allows
+		more operations to be queued.
+		Default: 10
+
+if FS_AIO
+
+config FS_NAIOC
+	int "Pre-allocated AIO containers"
+	default 8
+	---help---
+		The AIO containers hold an AIO control block and appends information
+		needed by the logic running within the RTOS.  These structures are
+		pre-allocated, the number pre-allocated controlled by this setting.
+
+		This setting controls the number of asynchronous I/O operations that
+		can be queued at one time.  When this count is exhausted, the caller
+		of aio_read(), aio_write(), or aio_fsync() will be forced to wait
+		for an available container.  That wait is minimized because each
+		container is released prior to starting the next I/O.
+
+		The AIO logic includes priority inheritance logic to prevent
+		priority inversion problems:  The priority of the low-priority work
+		queue will be boosted, if necessary, to level of the waiting thread.
+
+endif

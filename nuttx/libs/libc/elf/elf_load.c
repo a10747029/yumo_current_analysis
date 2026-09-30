@@ -1,0 +1,1042 @@
+/****************************************************************************
+ * libs/libc/elf/elf_load.c
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/config.h>
+
+#include <sys/param.h>
+#include <sys/types.h>
+
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <assert.h>
+#include <errno.h>
+#include <nuttx/debug.h>
+
+#include <nuttx/arch.h>
+#include <nuttx/fdpic.h>
+#include <nuttx/lib/elf.h>
+#include <nuttx/fs/fs.h>
+#include <nuttx/fs/ioctl.h>
+
+#include "libc.h"
+#include "elf/elf.h"
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+#define ELF_ALIGN_MASK   ((1 << CONFIG_LIBC_ELF_ALIGN_LOG2) - 1)
+#define ELF_ALIGNUP(a)   (((unsigned long)(a) + ELF_ALIGN_MASK) & ~ELF_ALIGN_MASK)
+#define ELF_ALIGNDOWN(a) ((unsigned long)(a) & ~ELF_ALIGN_MASK)
+
+/* _ALIGN_UP: 'a' is assumed to be a power of two */
+
+#define _ALIGN_UP(v, a)  (((v) + ((a) - 1)) & ~((a) - 1))
+
+#ifdef CONFIG_ARCH_USE_TEXT_HEAP
+#  define buffer_data_address(p) \
+            (FAR uint8_t *)up_textheap_data_address((FAR void *)p)
+#else
+#  define buffer_data_address(p) ((FAR uint8_t *)p)
+#endif
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+#ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
+static int libelf_section_alloc(FAR struct mod_loadinfo_s *loadinfo,
+                                FAR Elf_Shdr *shdr, uint8_t idx)
+{
+  if (loadinfo->ehdr.e_type == ET_DYN)
+    {
+      return -EINVAL;
+    }
+
+  if (loadinfo->sectalloc == NULL)
+    {
+      /* Allocate memory info for all sections */
+
+      loadinfo->sectalloc = lib_zalloc(sizeof(uintptr_t) *
+                                       loadinfo->ehdr.e_shnum);
+      if (loadinfo->sectalloc == NULL)
+        {
+          return -ENOMEM;
+        }
+    }
+
+  libelf_sectname(loadinfo, shdr);
+  if ((shdr->sh_flags & SHF_WRITE) != 0)
+    {
+#  ifdef CONFIG_ARCH_USE_DATA_HEAP
+      loadinfo->sectalloc[idx] = (uintptr_t)
+                                 up_dataheap_memalign(
+                                   (FAR const char *)loadinfo->iobuffer,
+                                                     shdr->sh_addralign,
+                                                     shdr->sh_size);
+#  else
+      loadinfo->sectalloc[idx] = (uintptr_t)lib_memalign(shdr->sh_addralign,
+                                                        shdr->sh_size);
+#  endif
+
+      if (loadinfo->datastart == 0)
+        {
+          loadinfo->datastart = loadinfo->sectalloc[idx];
+        }
+    }
+  else if (loadinfo->xipbase != 0)
+    {
+      loadinfo->sectalloc[idx] = loadinfo->xipbase + shdr->sh_offset;
+      if (loadinfo->textalloc == 0)
+        {
+          loadinfo->textalloc = loadinfo->sectalloc[idx];
+        }
+    }
+  else
+    {
+#  ifdef CONFIG_ARCH_USE_TEXT_HEAP
+      loadinfo->sectalloc[idx] = (uintptr_t)
+                                 up_textheap_memalign(
+                                   (FAR const char *)loadinfo->iobuffer,
+                                                     shdr->sh_addralign,
+                                                     shdr->sh_size);
+#  else
+      loadinfo->sectalloc[idx] = (uintptr_t)
+                                  lib_memalign(shdr->sh_addralign,
+                                               shdr->sh_size);
+#  endif
+
+      if (loadinfo->textalloc == 0)
+        {
+          loadinfo->textalloc = loadinfo->sectalloc[idx];
+        }
+    }
+
+  return OK;
+}
+#endif
+
+/****************************************************************************
+ * Name: libelf_elfsize
+ *
+ * Description:
+ *   Calculate total memory allocation for the ELF file.
+ *
+ ****************************************************************************/
+
+static void libelf_elfsize(FAR struct mod_loadinfo_s *loadinfo, bool alloc)
+{
+  size_t textsize = 0;
+  size_t datasize = 0;
+  int i;
+
+  /* Accumulate the size each section into memory that is marked SHF_ALLOC
+   * if CONFIG_ARCH_USE_SEPARATED_SECTION is enabled, allocate
+   * (and zero) memory for the each section.
+   */
+
+  if (loadinfo->ehdr.e_type == ET_DYN)
+    {
+      for (i = 0; i < loadinfo->ehdr.e_phnum; i++)
+        {
+          FAR Elf_Phdr *phdr = &loadinfo->phdr[i];
+          FAR void *textaddr = NULL;
+
+          if (phdr->p_type == PT_LOAD)
+            {
+              if (phdr->p_flags & PF_X)
+                {
+                  textsize += phdr->p_memsz;
+                  textaddr = (FAR void *)(uintptr_t)phdr->p_vaddr;
+                }
+              else
+                {
+                  datasize += phdr->p_memsz;
+                  loadinfo->datasec = phdr->p_vaddr;
+                  loadinfo->segpad  = phdr->p_vaddr -
+                                      ((uintptr_t)textaddr + textsize);
+                }
+            }
+        }
+    }
+  else
+    {
+      for (i = 0; i < loadinfo->ehdr.e_shnum; i++)
+        {
+          FAR Elf_Shdr *shdr = &loadinfo->shdr[i];
+
+          /* SHF_ALLOC indicates that the section requires memory during
+           * execution.
+           */
+
+          if ((shdr->sh_flags & SHF_ALLOC) != 0)
+            {
+              /* SHF_WRITE indicates that the section address space is write-
+               * able
+               */
+
+              if ((shdr->sh_flags & SHF_WRITE) != 0
+#ifdef CONFIG_ARCH_HAVE_TEXT_HEAP_WORD_ALIGNED_READ
+                  || (shdr->sh_flags & SHF_EXECINSTR) == 0
+#endif
+                  )
+                {
+#ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
+                  if (alloc && libelf_section_alloc(loadinfo, shdr, i) >= 0)
+                    {
+                      continue;
+                    }
+#endif
+
+                  datasize = _ALIGN_UP(datasize, shdr->sh_addralign);
+                  datasize += ELF_ALIGNUP(shdr->sh_size);
+                  if (loadinfo->dataalign < shdr->sh_addralign)
+                    {
+                      loadinfo->dataalign = shdr->sh_addralign;
+                    }
+                }
+              else
+                {
+#ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
+                  if (alloc && libelf_section_alloc(loadinfo, shdr, i) >= 0)
+                    {
+                      continue;
+                    }
+#endif
+
+                  textsize = _ALIGN_UP(textsize, shdr->sh_addralign);
+                  textsize += ELF_ALIGNUP(shdr->sh_size);
+                  if (loadinfo->textalign < shdr->sh_addralign)
+                    {
+                      loadinfo->textalign = shdr->sh_addralign;
+                    }
+                }
+            }
+        }
+    }
+
+  /* Reserve the descriptor pool.  R_ARM_FUNCDESC asks the loader to
+   * manufacture a descriptor after the segment is placed, and a library
+   * publishes one per exported function for dlsym().  The relocation and
+   * dynamic symbol counts bound how many.
+   */
+
+  if (loadinfo->fdpic)
+    {
+      size_t nrels = 0;
+
+      for (i = 0; i < loadinfo->ehdr.e_shnum; i++)
+        {
+          FAR Elf_Shdr *shdr = &loadinfo->shdr[i];
+
+          if ((shdr->sh_type == SHT_REL || shdr->sh_type == SHT_DYNSYM) &&
+              shdr->sh_entsize != 0)
+            {
+              nrels += shdr->sh_size / shdr->sh_entsize;
+            }
+        }
+
+      loadinfo->ndesc = nrels;
+      datasize += nrels * sizeof(struct fdpic_desc_s);
+
+      binfo("fdpic: reserving %zu descriptors behind the data\n", nrels);
+    }
+
+  /* An ET_DYN object is sized from its program headers, which give no
+   * section alignment.  A word is enough.
+   */
+
+  if (loadinfo->textalign == 0)
+    {
+      loadinfo->textalign = sizeof(uintptr_t);
+    }
+
+  if (loadinfo->dataalign == 0)
+    {
+      loadinfo->dataalign = sizeof(uintptr_t);
+    }
+
+  /* Save the allocation size */
+
+  loadinfo->textsize = textsize;
+  loadinfo->datasize = datasize;
+}
+
+#ifdef CONFIG_LIBC_ELF_LOADTO_LMA
+/****************************************************************************
+ * Name: libelf_vma2lma
+ *
+ * Description:
+ *   Convert section`s VMA to LMA according to PhysAddr(p_paddr) of
+ *   Program Header.
+ *
+ * Returned Value:
+ *   0 (OK) is returned on success and a negated errno is returned on
+ *   failure.
+ *
+ ****************************************************************************/
+
+static int libelf_vma2lma(FAR struct mod_loadinfo_s *loadinfo,
+                          FAR Elf_Shdr *shdr, FAR Elf_Addr *lma)
+{
+  int i;
+
+  for (i = 0; i < loadinfo->ehdr.e_phnum; i++)
+    {
+      FAR Elf_Phdr *phdr = &loadinfo->phdr[i];
+
+      if (shdr->sh_addr >= phdr->p_vaddr &&
+          shdr->sh_addr + shdr->sh_size <= phdr->p_vaddr + phdr->p_memsz &&
+          shdr->sh_offset >= phdr->p_offset &&
+          shdr->sh_offset <= phdr->p_offset + phdr->p_filesz)
+        {
+          *lma = phdr->p_paddr + shdr->sh_addr - phdr->p_vaddr;
+          return OK;
+        }
+    }
+
+  return -ENOENT;
+}
+#endif
+
+/****************************************************************************
+ * Name: libelf_set_emptysect_vma
+ *
+ * Description:
+ *   Set VMA for empty and unallocated sections, some relocations might
+ *   depend on this.
+ *
+ * Returned Value:
+ *   None.
+ *
+ ****************************************************************************/
+
+static void libelf_set_emptysect_vma(FAR struct mod_loadinfo_s *loadinfo,
+                                    int section)
+{
+  FAR Elf_Shdr *shdr = &loadinfo->shdr[section];
+
+  /* Set the section as data or text, depending on SHF_WRITE */
+
+  if ((shdr->sh_flags & SHF_WRITE) != 0
+#ifdef CONFIG_ARCH_HAVE_TEXT_HEAP_WORD_ALIGNED_READ
+      || (shdr->sh_flags & SHF_EXECINSTR) == 0
+#endif
+      )
+    {
+      shdr->sh_addr = loadinfo->datastart;
+    }
+  else
+    {
+      shdr->sh_addr = loadinfo->textalloc;
+    }
+}
+
+/****************************************************************************
+ * Name: libelf_loadfile
+ *
+ * Description:
+ *   Read the section data into memory. Section addresses in the shdr[] are
+ *   updated to point to the corresponding position in the memory.
+ *
+ * Input Parameters:
+ *   loadinfo - The load state.
+ *   gotidx   - Section index of .got, which the caller has already looked
+ *              up, or a negative value if the object has none.
+ *
+ * Returned Value:
+ *   0 (OK) is returned on success and a negated errno is returned on
+ *   failure.
+ *
+ ****************************************************************************/
+
+static inline int libelf_loadfile(FAR struct mod_loadinfo_s *loadinfo,
+                                  int gotidx)
+{
+  FAR uint8_t *text = (FAR uint8_t *)loadinfo->textalloc;
+  FAR uint8_t *data = (FAR uint8_t *)loadinfo->datastart;
+  int ret;
+  int i;
+
+  /* Read each PT_LOAD area into memory */
+
+  binfo("Loading sections - text: %p.%zx data: %p.%zx\n",
+        text, loadinfo->textsize, data, loadinfo->datasize);
+
+  if (loadinfo->ehdr.e_type == ET_DYN)
+    {
+      for (i = 0; i < loadinfo->ehdr.e_phnum; i++)
+        {
+          FAR Elf_Phdr *phdr = &loadinfo->phdr[i];
+
+          if (phdr->p_type == PT_LOAD)
+            {
+              if (phdr->p_flags & PF_X)
+                {
+                  if (loadinfo->fdpic && loadinfo->xipbase != 0)
+                    {
+                      /* Mapped, not copied. */
+
+                      continue;
+                    }
+
+                  ret = libelf_read(loadinfo, buffer_data_address(text),
+                                    phdr->p_filesz,
+                                    phdr->p_offset);
+                }
+              else
+                {
+                  size_t bsssize = phdr->p_memsz - phdr->p_filesz;
+
+                  ret = libelf_read(loadinfo, data, phdr->p_filesz,
+                                    phdr->p_offset);
+                  memset(data + phdr->p_filesz, 0, bsssize);
+                }
+
+              if (ret < 0)
+                {
+                  berr("ERROR: Failed to read section %d: %d\n", i, ret);
+                  return ret;
+                }
+            }
+        }
+    }
+  else
+    {
+      for (i = 0; i < loadinfo->ehdr.e_shnum; i++)
+        {
+          FAR Elf_Shdr *shdr = &loadinfo->shdr[i];
+          FAR uint8_t **pptr = NULL;
+
+          /* SHF_ALLOC indicates that the section requires memory during
+           * execution
+           */
+
+          if ((shdr->sh_flags & SHF_ALLOC) == 0 || shdr->sh_size == 0)
+            {
+              /* Set the VMA regardless */
+
+              libelf_set_emptysect_vma(loadinfo, i);
+              continue;
+            }
+
+#ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
+          if (loadinfo->ehdr.e_type == ET_REL ||
+              loadinfo->ehdr.e_type == ET_EXEC)
+            {
+              pptr = (FAR uint8_t **)&loadinfo->sectalloc[i];
+            }
+#endif
+
+          if (pptr == NULL)
+            {
+              /* SHF_WRITE indicates that the section address space is
+               * writeable
+               */
+
+              if ((shdr->sh_flags & SHF_WRITE) != 0
+#ifdef CONFIG_ARCH_HAVE_TEXT_HEAP_WORD_ALIGNED_READ
+                  || (shdr->sh_flags & SHF_EXECINSTR) == 0
+#endif
+                  )
+                {
+                  pptr = &data;
+                }
+              else
+                {
+                  pptr = &text;
+                }
+
+              if (loadinfo->xipbase == 0)
+                {
+                  /* If xipbase is not set, align the address
+                   * xipbase is set, the address can't be aligned
+                   */
+
+                  *pptr = (FAR uint8_t *)_ALIGN_UP((uintptr_t)*pptr,
+                                                   shdr->sh_addralign);
+                }
+            }
+
+          if ((shdr->sh_flags & SHF_WRITE) == 0 && loadinfo->xipbase != 0)
+            {
+              goto skipload;
+            }
+
+          /* SHT_NOBITS indicates that there is no data in the file for the
+           * section.
+           */
+
+          if (shdr->sh_type != SHT_NOBITS)
+            {
+#ifdef CONFIG_LIBC_ELF_LOADTO_LMA
+              ret = libelf_vma2lma(loadinfo, shdr, (FAR Elf_Addr *)pptr);
+              if (ret < 0)
+                {
+                  berr("ERROR: Failed to convert addr %d: %d\n", i, ret);
+                  return ret;
+                }
+#endif
+
+              /* Read the section data from sh_offset to the memory region */
+
+              ret = libelf_read(loadinfo, buffer_data_address(*pptr),
+                                shdr->sh_size, shdr->sh_offset);
+              if (ret < 0)
+                {
+                  berr("ERROR: Failed to read section %d: %d\n", i, ret);
+                  return ret;
+                }
+            }
+
+          /* If there is no data in an allocated section, then the allocated
+           * section must be cleared.
+           */
+
+#ifndef CONFIG_LIBC_ELF_LOADTO_LMA
+          else if (*pptr != NULL)
+            {
+              memset(*pptr, 0, shdr->sh_size);
+            }
+#endif
+
+skipload:
+
+          /* Update sh_addr to point to copy in memory */
+
+          binfo("%d. %08lx->%08lx\n", i,
+                (unsigned long)shdr->sh_addr, (unsigned long)*pptr);
+
+          /* Use offset to remember the original file address */
+
+          shdr->sh_offset = (uintptr_t)shdr->sh_addr;
+          shdr->sh_addr = (uintptr_t)*pptr;
+
+#ifdef CONFIG_ARCH_USE_SEPARATED_SECTION
+          if (loadinfo->ehdr.e_type != ET_REL)
+            {
+              *pptr += ELF_ALIGNUP(shdr->sh_size);
+            }
+#else
+          /* Setup the memory pointer for the next time through the loop */
+
+          *pptr += ELF_ALIGNUP(shdr->sh_size);
+#endif
+        }
+    }
+
+  /* Note the GOT.  The sections are placed by now, thus .got carries the
+   * address it will be read at.  An FDPIC object's sections are never
+   * placed, and libelf_bind() takes its base from DT_PLTGOT instead.
+   */
+
+  if (gotidx >= 0)
+    {
+      loadinfo->gotsize = loadinfo->shdr[gotidx].sh_size;
+
+      if (!loadinfo->fdpic)
+        {
+          loadinfo->gotbase = loadinfo->shdr[gotidx].sh_addr;
+        }
+    }
+
+  /* Update GOT table.  An FDPIC object's entries are relocated through its
+   * own relocations, so there is nothing to do for one here.
+   */
+
+  if (loadinfo->gotbase != 0)
+    {
+      FAR uintptr_t *got = (FAR uintptr_t *)loadinfo->gotbase;
+      FAR uintptr_t *end = got + loadinfo->gotsize / sizeof(uintptr_t);
+
+      for (; got < end; got++)
+        {
+          for (i = 0; i < loadinfo->ehdr.e_shnum; i++)
+            {
+              FAR Elf_Shdr *shdr = &loadinfo->shdr[i];
+
+              if ((shdr->sh_flags & SHF_ALLOC) == 0)
+                {
+                  continue;
+                }
+
+              if (*got >= shdr->sh_offset &&
+                  *got < shdr->sh_offset + shdr->sh_size)
+                {
+                  *got += shdr->sh_addr - shdr->sh_offset;
+                }
+            }
+        }
+    }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: libelf_xipacquire
+ *
+ * Description:
+ *   Ask the filesystem for the address of this file on its media, so the
+ *   read-only part of the object can run where it lies.  Ask for a pin
+ *   first: a compacting filesystem is not safe without one.  Do not ask at
+ *   all if this build cannot hold a pin.
+ *
+ * Returned Value:
+ *   Zero if an address was obtained, a negated errno otherwise.  Callers
+ *   that can live without one may ignore the failure.
+ *
+ ****************************************************************************/
+
+#ifdef HAVE_LIBC_ELF_PIN
+static int libelf_pinhold(FAR struct mod_loadinfo_s *loadinfo)
+{
+  FAR struct file *filep;
+  int ret;
+
+  /* The descriptor belongs to the task that called the loader, and the
+   * unload runs on another task.  Hold the file instead.
+   */
+
+  loadinfo->pinfile = lib_zalloc(sizeof(struct file));
+  if (loadinfo->pinfile == NULL)
+    {
+      return -ENOMEM;
+    }
+
+  ret = file_get(loadinfo->filfd, &filep);
+  if (ret >= 0)
+    {
+      ret = file_dup2(filep, loadinfo->pinfile);
+      file_put(filep);
+    }
+
+  if (ret < 0)
+    {
+      lib_free(loadinfo->pinfile);
+      loadinfo->pinfile = NULL;
+    }
+
+  return ret;
+}
+
+#endif
+
+static int libelf_xipacquire(FAR struct mod_loadinfo_s *loadinfo)
+{
+  uintptr_t base = 0;
+
+#ifdef HAVE_LIBC_ELF_PIN
+  if (ioctl(loadinfo->filfd, XIPFSIOC_PIN, (unsigned long)&base) >= 0)
+    {
+      int ret = libelf_pinhold(loadinfo);
+
+      if (ret < 0)
+        {
+          berr("ERROR: Failed to hold the pinned file: %d\n", ret);
+          ioctl(loadinfo->filfd, XIPFSIOC_UNPIN, 0);
+          return ret;
+        }
+
+      loadinfo->xipbase = base;
+      binfo("pinned xipbase %" PRIxPTR "\n", loadinfo->xipbase);
+      return OK;
+    }
+#endif
+
+  if (ioctl(loadinfo->filfd, FIOC_XIPBASE, (unsigned long)&base) >= 0)
+    {
+      loadinfo->xipbase = base;
+      binfo("can use xipbase %" PRIxPTR "\n", loadinfo->xipbase);
+      return OK;
+    }
+
+  return -ENOTTY;
+}
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+#ifdef HAVE_LIBC_ELF_PIN
+/****************************************************************************
+ * Name: libelf_pinrelease
+ *
+ * Description:
+ *   Give back an XIP pin and the file it was held through, so the
+ *   filesystem can reclaim the extent.
+ *
+ ****************************************************************************/
+
+void libelf_pinrelease(FAR struct file **pinfile)
+{
+  if (*pinfile != NULL)
+    {
+      file_ioctl(*pinfile, XIPFSIOC_UNPIN, 0);
+      file_close(*pinfile);
+      lib_free(*pinfile);
+      *pinfile = NULL;
+    }
+}
+#endif
+
+/****************************************************************************
+ * Name: libelf_load
+ *
+ * Description:
+ *   Loads the binary into memory, allocating memory, performing relocations
+ *   and initializing the data and bss segments.
+ *
+ * Returned Value:
+ *   0 (OK) is returned on success and a negated errno is returned on
+ *   failure.
+ *
+ ****************************************************************************/
+
+int libelf_load(FAR struct mod_loadinfo_s *loadinfo)
+{
+  int gotidx;
+  int ret;
+  int i;
+
+  binfo("loadinfo: %p\n", loadinfo);
+  DEBUGASSERT(loadinfo && loadinfo->filfd >= 0);
+
+  /* Load section and program headers into memory */
+
+  ret = libelf_loadhdrs(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_loadhdrs failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+  /* An object with a GOT is position independent, thus its read-only part
+   * may be able to stay where the filesystem holds it.  Keep the index:
+   * libelf_loadfile() notes the section once it has placed it.
+   */
+
+  gotidx = libelf_findsection(loadinfo, ".got");
+  if (gotidx >= 0)
+    {
+      binfo("GOT section found! index %d\n", gotidx);
+      libelf_xipacquire(loadinfo);
+    }
+
+  /* Determine total size to allocate */
+
+  libelf_elfsize(loadinfo, true);
+
+  /* Allocate (and zero) memory for the ELF file. */
+
+  /* Allocate memory to hold the ELF image */
+
+  /* For Dynamic shared objects the relative positions between
+   * text and data must be maintained due to references to the
+   * GOT. Therefore we cannot do two different allocations.
+   */
+
+#ifndef CONFIG_LIBC_ELF_LOADTO_LMA
+
+  if (loadinfo->ehdr.e_type == ET_REL || loadinfo->ehdr.e_type == ET_EXEC)
+    {
+#  ifndef CONFIG_ARCH_USE_SEPARATED_SECTION
+      if (loadinfo->xipbase != 0)
+        {
+          loadinfo->textalloc = loadinfo->xipbase +
+                                loadinfo->shdr[1].sh_offset;
+        }
+      else if (loadinfo->textsize > 0)
+        {
+#    ifdef CONFIG_ARCH_USE_TEXT_HEAP
+          loadinfo->textalloc = (uintptr_t)
+                                up_textheap_memalign(loadinfo->textalign,
+                                                     loadinfo->textsize +
+                                                     loadinfo->segpad);
+#    else
+          loadinfo->textalloc = (uintptr_t)lib_memalign(loadinfo->textalign,
+                                                        loadinfo->textsize +
+                                                        loadinfo->segpad);
+#    endif
+          if (!loadinfo->textalloc)
+            {
+              berr("ERROR: Failed to allocate memory for the module text\n");
+              ret = -ENOMEM;
+              goto errout_with_buffers;
+            }
+        }
+
+      if (loadinfo->datasize > 0)
+        {
+#    ifdef CONFIG_ARCH_USE_DATA_HEAP
+          loadinfo->datastart = (uintptr_t)
+                                 up_dataheap_memalign(loadinfo->dataalign,
+                                                      loadinfo->datasize);
+#    else
+          loadinfo->datastart = (uintptr_t)lib_memalign(loadinfo->dataalign,
+                                                        loadinfo->datasize);
+#    endif
+          if (!loadinfo->datastart)
+            {
+              berr("ERROR: Failed to allocate memory for the module data\n");
+              ret = -ENOMEM;
+              goto errout_with_buffers;
+            }
+        }
+#  endif
+    }
+  else if (loadinfo->ehdr.e_type == ET_DYN)
+    {
+      if (loadinfo->fdpic)
+        {
+          /* The two segments are placed independently, thus only the
+           * writable segment is allocated, once per instance.
+           */
+
+          if (loadinfo->xipbase != 0)
+            {
+              /* The text stays on the media.  The media address is the base
+               * of the file, thus add the file offset of the segment.
+               */
+
+              for (i = 0; i < loadinfo->ehdr.e_phnum; i++)
+                {
+                  FAR Elf_Phdr *phdr = &loadinfo->phdr[i];
+
+                  if (phdr->p_type == PT_LOAD &&
+                      (phdr->p_flags & PF_X) != 0)
+                    {
+                      loadinfo->textalloc = loadinfo->xipbase +
+                                            phdr->p_offset;
+                      break;
+                    }
+                }
+            }
+          else if (loadinfo->textsize > 0)
+            {
+              /* The filesystem cannot show its media, thus copy the text
+               * to RAM.  The instances no longer share it.
+               */
+
+#  if defined(CONFIG_ARCH_USE_TEXT_HEAP) && \
+      defined(CONFIG_ARCH_USE_SEPARATED_SECTION)
+              loadinfo->textalloc = (uintptr_t)
+                                    up_textheap_memalign(".text",
+                                                         loadinfo->textalign,
+                                                         loadinfo->textsize);
+#  elif defined(CONFIG_ARCH_USE_TEXT_HEAP)
+              loadinfo->textalloc = (uintptr_t)
+                                    up_textheap_memalign(loadinfo->textalign,
+                                                         loadinfo->textsize);
+#  else
+              loadinfo->textalloc = (uintptr_t)
+                                    lib_memalign(loadinfo->textalign,
+                                                 loadinfo->textsize);
+#  endif
+              if (loadinfo->textalloc == 0)
+                {
+                  berr("ERROR: Failed to allocate the module's text\n");
+                  ret = -ENOMEM;
+                  goto errout_with_buffers;
+                }
+            }
+
+          if (loadinfo->datasize > 0)
+            {
+              loadinfo->datastart =
+                (uintptr_t)lib_memalign(loadinfo->dataalign,
+                                        loadinfo->datasize);
+              if (!loadinfo->datastart)
+                {
+                  berr("ERROR: Failed to allocate the module's data\n");
+                  ret = -ENOMEM;
+                  goto errout_with_buffers;
+                }
+            }
+
+          /* The pool was reserved at the end of the segment when it was
+           * sized, so it starts that many descriptors back from the end.
+           */
+
+          loadinfo->descpool = (FAR struct fdpic_desc_s *)
+                               (loadinfo->datastart + loadinfo->datasize) -
+                               loadinfo->ndesc;
+        }
+      else
+        {
+          /* Everything else keeps text and data adjacent: one allocation,
+           * data behind text.
+           */
+
+          loadinfo->textalloc = (uintptr_t)
+                                lib_memalign(loadinfo->textalign,
+                                             loadinfo->textsize +
+                                             loadinfo->datasize +
+                                             loadinfo->segpad);
+
+          if (!loadinfo->textalloc)
+            {
+              berr("ERROR: Failed to allocate memory for the module\n");
+              ret = -ENOMEM;
+              goto errout_with_buffers;
+            }
+
+          loadinfo->datastart = loadinfo->textalloc +
+                                loadinfo->textsize +
+                                loadinfo->segpad;
+        }
+    }
+
+#endif /* CONFIG_LIBC_ELF_LOADTO_LMA */
+
+  /* Load ELF section data into memory */
+
+  ret = libelf_loadfile(loadinfo, gotidx);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_loadfile failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+#ifdef CONFIG_LIBC_ELF_EXIDX_SECTNAME
+  ret = libelf_findsection(loadinfo, CONFIG_LIBC_ELF_EXIDX_SECTNAME);
+  if (ret < 0)
+    {
+      binfo("libelf_findsection: Exception Index section not found: %d\n",
+            ret);
+    }
+  else
+    {
+      up_init_exidx(loadinfo->shdr[ret].sh_addr,
+                    loadinfo->shdr[ret].sh_size);
+    }
+#endif
+
+  return OK;
+
+  /* Error exits */
+
+errout_with_buffers:
+  libelf_unload(loadinfo);
+  return ret;
+}
+
+/****************************************************************************
+ * Name: libelf_load_with_addrenv
+ *
+ * Description:
+ *   Loads the binary into memory, use the address environment to load the
+ *   binary.
+ *
+ * Returned Value:
+ *   0 (OK) is returned on success and a negated errno is returned on
+ *   failure.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_ARCH_ADDRENV
+int libelf_load_with_addrenv(FAR struct mod_loadinfo_s *loadinfo)
+{
+  int gotidx;
+  int ret;
+
+  binfo("loadinfo: %p\n", loadinfo);
+  DEBUGASSERT(loadinfo && loadinfo->filfd >= 0);
+
+  /* Load section and program headers into memory */
+
+  ret = libelf_loadhdrs(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_loadhdrs failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+  /* An object with a GOT is position independent, thus its read-only part
+   * may be able to stay where the filesystem holds it.  Keep the index:
+   * libelf_loadfile() notes the section once it has placed it.
+   */
+
+  gotidx = libelf_findsection(loadinfo, ".got");
+  if (gotidx >= 0)
+    {
+      binfo("GOT section found! index %d\n", gotidx);
+      libelf_xipacquire(loadinfo);
+    }
+
+  /* Determine total size to allocate */
+
+  libelf_elfsize(loadinfo, false);
+
+  ret = libelf_addrenv_alloc(loadinfo, loadinfo->textsize,
+                             loadinfo->datasize);
+  if (ret < 0)
+    {
+      berr("ERROR: Failed to create address environment: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+  /* If CONFIG_ARCH_ADDRENV=y, then the loaded ELF lies in a virtual address
+   * space that may not be in place now.  elf_addrenv_select() will
+   * temporarily instantiate that address space.
+   */
+
+  ret = libelf_addrenv_select(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: elf_addrenv_select() failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+  ret = libelf_loadfile(loadinfo, gotidx);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_loadfile failed: %d\n", ret);
+      goto errout_with_addrenv;
+    }
+
+  /* Restore the original address environment */
+
+  ret = libelf_addrenv_restore(loadinfo);
+  if (ret < 0)
+    {
+      berr("ERROR: libelf_addrenv_restore() failed: %d\n", ret);
+      goto errout_with_buffers;
+    }
+
+  return OK;
+
+errout_with_addrenv:
+  libelf_addrenv_restore(loadinfo);
+
+errout_with_buffers:
+  libelf_unload(loadinfo);
+  return ret;
+}
+#endif
